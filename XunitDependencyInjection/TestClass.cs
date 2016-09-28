@@ -11,45 +11,6 @@ using Xunit.Sdk;
 
 namespace XunitDependencyInjection
 {
-    public interface IDepdencyA
-    {
-        string Bla();
-    }
-
-    public interface IDepdencyB
-    {
-        string Bla();
-    }
-
-    public class DepdencyA : IDepdencyA
-    {
-        public string Bla()
-        {
-            return "Hello World";
-        }
-    }
-
-    public class DepdencyB : IDepdencyB
-    {
-        public string Bla()
-        {
-            return "!";
-        }
-    }
-
-    public interface ICalculator
-    {
-        int Add(int a, int b);
-    }
-
-    public class Calculator : ICalculator
-    {
-        public int Add(int a, int b)
-        {
-            return a + b;
-        }
-    }
-
     public class TestClass
     {
         private readonly IDepdencyA _depdencyA;
@@ -84,6 +45,54 @@ namespace XunitDependencyInjection
         }
     }
 
+
+    public interface IDepdencyA
+    {
+        string Bla();
+    }
+
+    public interface IDepdencyB
+    {
+        string Bla();
+    }
+
+    public class DepdencyA : IDepdencyA
+    {
+        public string Bla()
+        {
+            return "Hello World";
+        }
+    }
+
+    public class DepdencyB : IDepdencyB
+    {
+        public string Bla()
+        {
+            return "!";
+        }
+    }
+
+    public interface ICalculator
+    {
+        int Add(int a, int b);
+    }
+
+    public class Calculator : ICalculator
+    {
+        private readonly IDepdencyA _depdencyA;
+
+        public Calculator(IDepdencyA depdencyA)
+        {
+            _depdencyA = depdencyA;
+        }
+        public int Add(int a, int b)
+        {
+            return a + b;
+        }
+    }
+
+
+
     [TestFrameworkDiscoverer("XunitDependencyInjection.CustomDependcyInjectionDiscoverer", "XunitDependencyInjection")]
     [AttributeUsage(AttributeTargets.Assembly)]
     public class XunitWithDependencyInjectionAttribute : Attribute, ITestFrameworkAttribute
@@ -93,7 +102,6 @@ namespace XunitDependencyInjection
 
     public class CustomDependcyInjectionDiscoverer : ITestFrameworkTypeDiscoverer
     {
-        
         public Type GetTestFrameworkType(IAttributeInfo attribute)
         {
             return typeof(CustomXunitTestFramework);
@@ -159,7 +167,7 @@ namespace XunitDependencyInjection
 
     public class CustomXunitTestCollectionRunner : XunitTestCollectionRunner
     {
-        protected IMessageSink DiagnosticMessageSink { get; }
+        private readonly IMessageSink _diagnosticMessageSink;
 
         public CustomXunitTestCollectionRunner(ITestCollection testCollection, IEnumerable<IXunitTestCase> testCases,
             IMessageSink diagnosticMessageSink, IMessageBus messageBus, ITestCaseOrderer testCaseOrderer,
@@ -168,21 +176,85 @@ namespace XunitDependencyInjection
                 testCollection, testCases, diagnosticMessageSink, messageBus, testCaseOrderer, aggregator,
                 cancellationTokenSource)
         {
-            DiagnosticMessageSink = diagnosticMessageSink;
+            _diagnosticMessageSink = diagnosticMessageSink;
         }
 
-        protected override async Task<RunSummary> RunTestClassAsync(ITestClass testClass, IReflectionTypeInfo @class,
+        protected override Task<RunSummary> RunTestClassAsync(ITestClass testClass, IReflectionTypeInfo @class,
             IEnumerable<IXunitTestCase> testCases)
         {
-            // wird nur einmal aufgerufen für mehrere Facts
-            var dependencyResolver = GetContainer();
-            var summary = await new CustomXunitTestClassRunner(testClass, @class, testCases, DiagnosticMessageSink, MessageBus,
-                    TestCaseOrderer, new ExceptionAggregator(Aggregator), CancellationTokenSource, CollectionFixtureMappings, dependencyResolver)
-                .RunAsync();
+            return new CustomXunitTestClassRunner(testClass, @class, testCases, _diagnosticMessageSink, MessageBus,
+                TestCaseOrderer, new ExceptionAggregator(Aggregator), CancellationTokenSource, CollectionFixtureMappings).RunAsync();
+        }
+    }
 
-            dependencyResolver.Dispose();
+    public class CustomXunitTestClassRunner : XunitTestClassRunner
+    {
+        public CustomXunitTestClassRunner(ITestClass testClass, IReflectionTypeInfo @class,
+            IEnumerable<IXunitTestCase> testCases, IMessageSink diagnosticMessageSink, IMessageBus messageBus,
+            ITestCaseOrderer testCaseOrderer, ExceptionAggregator aggregator,
+            CancellationTokenSource cancellationTokenSource, IDictionary<Type, object> collectionFixtureMappings)
+            : base(
+                testClass, @class, testCases, diagnosticMessageSink, messageBus, testCaseOrderer, aggregator,
+                cancellationTokenSource, collectionFixtureMappings)
+        {
+        }
+
+        protected override Task<RunSummary> RunTestMethodAsync(ITestMethod testMethod, IReflectionMethodInfo method,
+            IEnumerable<IXunitTestCase> testCases, object[] constructorArguments)
+            => new CustomXunitTestMethodRunner(SelectTestClassConstructor(), testMethod, Class, method, testCases, DiagnosticMessageSink, MessageBus, new ExceptionAggregator(Aggregator), CancellationTokenSource, constructorArguments).RunAsync();
+
+
+        protected override bool TryGetConstructorArgument(ConstructorInfo constructor, int index,
+            ParameterInfo parameter, out object argumentValue)
+        {
+            // we just assign null, because we build the constructor parameters later
+            // With this we don't support ClassFixtures, CollectionFixtures and TestOutputHelper anymore
+            // It might be possible to support them in future
+            argumentValue = null;
+            return true;
+        }
+    }
+
+    public class CustomXunitTestMethodRunner : XunitTestMethodRunner
+    {
+        private readonly ConstructorInfo _constructorInfo;
+        private readonly IMessageSink _diagnosticMessageSink;
+        private object[] _constructorParameterInstances;
+
+        public CustomXunitTestMethodRunner(ConstructorInfo constructorInfo, ITestMethod testMethod, IReflectionTypeInfo @class,
+            IReflectionMethodInfo method, IEnumerable<IXunitTestCase> testCases, IMessageSink diagnosticMessageSink, IMessageBus messageBus,
+            ExceptionAggregator aggregator, CancellationTokenSource cancellationTokenSource, object[] constructorArguments) :
+                base(testMethod, @class, method, testCases, diagnosticMessageSink, messageBus, aggregator, cancellationTokenSource, constructorArguments)
+        {
+            _constructorInfo = constructorInfo;
+            _diagnosticMessageSink = diagnosticMessageSink;
+        }
+
+        protected override async Task<RunSummary> RunTestCasesAsync()
+        {
+            var summary = new RunSummary();
+
+            foreach (var testCase in TestCases)
+            {
+                using (var container = GetContainer())
+                {
+                    _constructorParameterInstances = _constructorInfo.GetParameters()
+                        .Select(x => x.ParameterType)
+                        .Select(x => container.GetInstance(x))
+                        .ToArray();
+
+                    summary.Aggregate(await RunTestCaseAsync(testCase));
+                }
+
+                if (CancellationTokenSource.IsCancellationRequested)
+                    break;
+            }
+
             return summary;
         }
+
+        protected override Task<RunSummary> RunTestCaseAsync(IXunitTestCase testCase)
+            => testCase.RunAsync(_diagnosticMessageSink, MessageBus, _constructorParameterInstances, new ExceptionAggregator(Aggregator), CancellationTokenSource);
 
         private IDependencyResolver GetContainer()
         {
@@ -197,37 +269,6 @@ namespace XunitDependencyInjection
             dependencyResolver.Boot();
 
             return dependencyResolver;
-        }
-    }
-
-    public class CustomXunitTestClassRunner : XunitTestClassRunner
-    {
-        private readonly IDependencyResolver _dependencyResolver;
-
-        public CustomXunitTestClassRunner(ITestClass testClass, IReflectionTypeInfo @class,
-            IEnumerable<IXunitTestCase> testCases, IMessageSink diagnosticMessageSink, IMessageBus messageBus,
-            ITestCaseOrderer testCaseOrderer, ExceptionAggregator aggregator,
-            CancellationTokenSource cancellationTokenSource, IDictionary<Type, object> collectionFixtureMappings, IDependencyResolver dependencyResolver)
-            : base(
-                testClass, @class, testCases, diagnosticMessageSink, messageBus, testCaseOrderer, aggregator,
-                cancellationTokenSource, collectionFixtureMappings)
-        {
-            _dependencyResolver = dependencyResolver;
-        }
-
-        protected override bool TryGetConstructorArgument(ConstructorInfo constructor, int index,
-            ParameterInfo parameter, out object argumentValue)
-        {
-            try
-            {
-                argumentValue = _dependencyResolver.GetInstance(parameter.ParameterType);
-                return true;
-            }
-            catch (Exception)
-            {
-                argumentValue = null;
-                return false;
-            }
         }
     }
 
